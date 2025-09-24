@@ -1,0 +1,68 @@
+# Bu dosyayı comcai_backend repository'sinde .github/workflows/ klasörüne koyun
+name: Deploy Backend to ECS
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths: [ '**' ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-central-1
+  ECS_CLUSTER: comcai-berkay-test-cluster
+  ECS_SERVICE: comcai-berkay-test-backend-service
+  ECS_TASK_DEFINITION: comcai-berkay-test-backend-task
+  CONTAINER_NAME: comcai-berkay-test-backend-container
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::677276116587:role/comcai-berkay-test-github-actions-role
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      run: |
+        docker build -t ghcr.io/${{ github.repository_owner }}/comcai_backend:${{ env.IMAGE_TAG }} .
+        docker push ghcr.io/${{ github.repository_owner }}/comcai_backend:${{ env.IMAGE_TAG }}
+
+    - name: Download task definition
+      run: |
+        aws ecs describe-task-definition \
+          --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+          --query taskDefinition > task-definition.json
+
+    - name: Fill in the new image ID in the Amazon ECS task definition
+      id: task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: task-definition.json
+        container-name: ${{ env.CONTAINER_NAME }}
+        image: ghcr.io/${{ github.repository_owner }}/comcai_backend:${{ env.IMAGE_TAG }}
+
+    - name: Deploy Amazon ECS task definition
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        service: ${{ env.ECS_SERVICE }}
+        cluster: ${{ env.ECS_CLUSTER }}
+        wait-for-service-stability: true
